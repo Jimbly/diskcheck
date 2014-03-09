@@ -13,6 +13,7 @@
     "monk": "~0.8.1",
     "cli-color": "~0.2.3",
     "argparse": "~0.1.15",
-    "line-stream": "0.0.3"
+    "line-stream": "0.0.3",
+    "through": "~2.3.4"
   }
 }

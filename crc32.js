@@ -7,6 +7,9 @@
  * http://www.opensource.org/licenses/mit-license.php
 **/
 
+var fs = require('fs');
+var through = require('through');
+
 /* Table of CRCs of all 8-bit messages. */
 var _crc_table = new Array(256);
 
@@ -50,3 +53,29 @@ exports.crc32 = function crc32(buf)
 {
   return (update_crc(0xffffffff, buf, buf.length) ^ 0xffffffff);
 };
+
+// cb(err, crc32);
+exports.crcFileInMem = function (filename, cb) {
+  fs.readFile(filename, function (err, data) {
+    if (err) {
+      return cb(err);
+    }
+    cb(undefined, exports.crc32(data));
+  });
+};
+
+// cb(err, crc32);
+exports.crcFile = function (filename, cb) {
+  var file = fs.createReadStream(filename);
+  file.on('error', cb);
+  var crc = 0xffffffff;
+  var th = through(function write(data) {
+    crc = update_crc(crc, data, data.length);
+  },
+  function end () { //optional
+    cb(undefined, crc ^ 0xffffffff);
+  });
+  file.pipe(th);
+};
+
+// TODO: use a native module, this is toooo sloooowwww

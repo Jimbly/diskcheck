@@ -15,6 +15,9 @@ var MultiTask = require('./multi_task.js');
 var COLLECTION = 'test';
 var FOLDER = '/var/data/smb_private/CD Images/';
 
+// var COLLECTION = 'test';
+// var FOLDER = '/var/data/smb_stuff/Anime/Promos/';
+
 var ArgumentParser = require('argparse').ArgumentParser;
 var parser = new ArgumentParser({
   version: '0.0.1',
@@ -111,11 +114,35 @@ function crcFromFilename(filename, next) {
   });
 }
 
+function pad2(str) {
+  return ('0' + str).slice(-2);
+}
+
+function formatBytes(bytes) {
+  if (bytes === 1) {
+    return '1 byte';
+  }
+  if (bytes < 1024) {
+    return bytes.toFixed(0) + ' bytes';
+  }
+  if (bytes < 1024 * 1024) {
+    return (bytes / 1024).toFixed(2) + ' kb';
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return (bytes / 1024 / 1024).toFixed(2) + ' mb';
+  }
+  if (bytes < 1024 * 1024 * 1024 * 1024) {
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' gb';
+  }
+  return (bytes / 1024 / 1024 / 1024 / 1024).toFixed(2) + ' tb';
+}
 
 function doCheck(next) {
   var scantime = Date.now();
+  var last_print_time = Date.now();
   var count = 0;
   var errors = 0;
+  var bytes_read = 0;
   var results = fs.createWriteStream('results.txt');
   results.write('# Scan start: ' + scantime + ' (' + new Date(scantime).toLocaleString() + ')');
   results.write('# Mismatches logged below\n');
@@ -124,16 +151,21 @@ function doCheck(next) {
 
   walkDir(FOLDER, '/', function (relpath, stat, next) {
     ++count;
-    if (count % 25 === 0) {
-      console.log('Checked ' + count + ' files, found '
+    bytes_read += stat.size;
+    var now = Date.now();
+    if ((now - last_print_time) > 30000) {
+      var dt = now - scantime;
+      var bps = bytes_read * 1000 / dt;
+      last_print_time = now;
+      console.log(clc.cyan('Checked ' + count + ' files, found '
         + (errors ? clc.yellowBright(errors) : errors)
-        + ' error' + (errors === 1 ? '' : 's'));
+        + ' error' + (errors === 1 ? '' : 's')
+        + ', ' + formatBytes(bytes_read) + ', ' + formatBytes(bps) + '/s'
+      ));
     }
     process.stdout.write('\r' + relpath);
-    // TODO: stream this
-    fs.readFile(path.join(FOLDER, relpath), function (err, data) {
+    crc32.crcFile(path.join(FOLDER, relpath), function (err, crc) {
       if (err) { throw err; }
-      var crc = crc32.crc32(data);
       crc = formatCRC(crc);
       var line = '\r' + relpath + clc.blackBright(' -- CRC:' + crc);
       process.stdout.write(line);
@@ -158,7 +190,12 @@ function doCheck(next) {
       });
     });
   }, function () {
-    console.log('Done checking, ' + errors + ' errors');
+    var dt = Date.now() - scantime;
+    var bps = bytes_read * 1000 / dt;
+    console.log(clc.cyanBright('Done checking, ' + errors + ' errors'
+      + ', took ' + Math.floor(dt / 1000 / 60) + ':' + pad2(Math.floor(dt / 1000))
+      + ', ' + formatBytes(bytes_read) + ', ' + formatBytes(bps) + '/s'
+    ));
     results.write('# Scan finish: ' + Date.now() + ' (' + new Date().toLocaleString() + ')');
     results.close();
     next();
