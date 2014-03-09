@@ -9,11 +9,14 @@ var linestream = require('line-stream');
 var util = require('util');
 var MultiTask = require('./multi_task.js');
 
-// var COLLECTION = 'diskcheck';
-// var FOLDER = '/var/data/diskcheck';
+var MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
+//var MINSCANTIME = Infinity; // Always recheck every file
 
-var COLLECTION = 'test';
-var FOLDER = '/var/data/smb_private/CD Images/';
+var COLLECTION = 'diskcheck';
+var FOLDER = '/var/data/diskcheck';
+
+// var COLLECTION = 'test';
+// var FOLDER = '/var/data/smb_private/CD Images/';
 
 // var COLLECTION = 'test';
 // var FOLDER = '/var/data/smb_stuff/Anime/Promos/';
@@ -137,10 +140,38 @@ function formatBytes(bytes) {
   return (bytes / 1024 / 1024 / 1024 / 1024).toFixed(2) + ' tb';
 }
 
+function shouldCheckFile(filename, cb) {
+  if (MINSCANTIME > Date.now()) {
+    return cb(true);
+  }
+  files.findById(filename, function (err, doc) {
+    if (!err && doc && doc.crc32 && doc.scantime > MINSCANTIME) {
+      return cb(false);
+    }
+    cb(true);
+  });
+}
+
+function replace(filename, crc32, scantime, next) {
+  files.updateById(filename, { crc32: crc32, scantime: scantime }, function (err, code) {
+    if (!err && code === 1) {
+      // success
+      return next();
+    }
+    if (err) { throw err; }
+    // Else probably did not exist, do an insert
+    files.insert({ _id: filename, crc32: crc32, scantime: scantime }, function (err) {
+      if (err) { throw err; }
+      next();
+    });
+  });
+}
+
 function doCheck(next) {
   var scantime = Date.now();
   var last_print_time = Date.now();
   var count = 0;
+  var count_since_print = 0;
   var errors = 0;
   var bytes_read = 0;
   var results = fs.createWriteStream('results.txt');
@@ -151,11 +182,12 @@ function doCheck(next) {
 
   walkDir(FOLDER, '/', function (relpath, stat, next) {
     ++count;
-    bytes_read += stat.size;
+    ++count_since_print;
     var now = Date.now();
-    if ((now - last_print_time) > 30000) {
+    if ((now - last_print_time) > 30000 || count_since_print > 15) {
       var dt = now - scantime;
       var bps = bytes_read * 1000 / dt;
+      count_since_print = 0;
       last_print_time = now;
       console.log(clc.cyan('Checked ' + count + ' files, found '
         + (errors ? clc.yellowBright(errors) : errors)
@@ -164,29 +196,35 @@ function doCheck(next) {
       ));
     }
     process.stdout.write('\r' + relpath);
-    crc32.crcFile(path.join(FOLDER, relpath), function (err, crc) {
-      if (err) { throw err; }
-      crc = formatCRC(crc);
-      var line = '\r' + relpath + clc.blackBright(' -- CRC:' + crc);
-      process.stdout.write(line);
-      crcFromFilename(relpath, function (expected_crc, source) {
-        if (!expected_crc) {
-          console.log(line + clc.blue('  Updating CRC in database'));
-          files.insert({ _id: relpath, crc32: crc, scantime: scantime }, function (err, doc) {
-            if (err) { throw err; }
-            next();
-          });
-          return;
-        }
-        if (expected_crc !== crc) {
+    shouldCheckFile(relpath, function (should_check) {
+      if (!should_check) {
+        console.log('\r' + relpath + clc.blackBright(' -- skipping'));
+        return next();
+      }
+      bytes_read += stat.size;
+      crc32.crcFile(path.join(FOLDER, relpath), function (err, crc) {
+        if (err) { throw err; }
+        crc = formatCRC(crc);
+        var line = '\r' + relpath + clc.blackBright(' -- CRC:' + crc);
+        process.stdout.write(line);
+        crcFromFilename(relpath, function (expected_crc, source) {
+          if (!expected_crc) {
+            console.log(line + clc.blue('  Inserting CRC into database'));
+            replace(relpath, crc, scantime, next);
+            return;
+          }
+          if (expected_crc === crc) {
+            // Update database with scan time
+            console.log(line + clc.blue('  Matches'));
+            replace(relpath, crc, scantime, next);
+            return;
+          }
           console.log(line + clc.redBright('  CRC Mismatch, expected ' + expected_crc +
             ' from ' + source));
           errors++;
           results.write('d ' + crc + ' ' + expected_crc + ' ' + source + ' ' + relpath + '\n');
-        } else {
-          console.log(line + clc.green('  Matches'));
-        }
-        next();
+          next();
+        });
       });
     });
   }, function () {
@@ -208,6 +246,7 @@ function doFix(next) {
 
   var mt = new MultiTask(next);
 
+  var scantime = Date.now(); // TODO: grab from results.txt?
   s.on('data', function (line) {
     if (line.match(comment_regex)) {
       return;
@@ -226,7 +265,7 @@ function doFix(next) {
       }
       console.log(clc.blue('Updating "' + filename + '" to ' + disk_crc));
       mt.dispatch();
-      files.updateById(filename, { crc32: disk_crc }, function (err, doc) {
+      files.updateById(filename, { crc32: disk_crc, scantime: scantime }, function (err, doc) {
         if (err) { throw err; }
         console.log(clc.blueBright('Updated "' + filename + '" to ' + disk_crc));
         mt.done();
