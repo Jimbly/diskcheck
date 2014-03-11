@@ -1,4 +1,4 @@
-/*jslint vars:true, nomen:true, indent:2, plusplus:true, unparam:true */
+/*jslint vars:true, nomen:true, indent:2, plusplus:true, unparam:true, stupid:true */
 "use strict";
 var crc32 = require('./crc32.js');
 var clc = require('cli-color');
@@ -174,6 +174,15 @@ function doCheck(next) {
   var count_since_print = 0;
   var errors = 0;
   var bytes_read = 0;
+  if (fs.existsSync('results.txt')) {
+    if (fs.existsSync('results.txt.1')) {
+      if (fs.existsSync('results.txt.2')) {
+        fs.unlinkSync('results.txt.2');
+      }
+      fs.renameSync('results.txt.1', 'results.txt.2');
+    }
+    fs.renameSync('results.txt', 'results.txt.1');
+  }
   var results = fs.createWriteStream('results.txt');
   results.write('# Scan start: ' + scantime + ' (' + new Date(scantime).toLocaleString() + ')');
   results.write('# Mismatches logged below\n');
@@ -203,7 +212,12 @@ function doCheck(next) {
       }
       bytes_read += stat.size;
       crc32.crcFile(path.join(FOLDER, relpath), function (err, crc) {
-        if (err) { throw err; }
+        if (err) {
+          console.log('\r' + relpath + clc.redBright(' -- error reading file: ' + err));
+          errors++;
+          results.write('# read error ' + (err.code || '') + ' ' + relpath + '\n');
+          return next();
+        }
         crc = formatCRC(crc);
         var line = '\r' + relpath + clc.blackBright(' -- CRC:' + crc);
         process.stdout.write(line);
