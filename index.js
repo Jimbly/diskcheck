@@ -83,28 +83,20 @@ function walkDir(base, dir, cb, dir_next) {
   });
 }
 
-function formatCRC(crc) {
-  if (crc < 0) {
-    crc += 4294967296;
-  }
-  crc = crc.toString(16);
-  while (crc.length < 8) {
-    crc = '0' + crc;
-  }
-  return crc;
-}
-
 var crc_regex1 = /\[([0-9a-f]{8})\]/;
 var crc_regex2 = /\[([0-9A-F]{8})\]/;
 // next(crc || undefined, source)
 function crcFromFilename(filename, next) {
-  var m = filename.match(crc_regex1);
-  if (m) {
-    return next(m[1].toLowerCase(), 'filename');
-  }
-  m = filename.match(crc_regex2);
-  if (m) {
-    return next(m[1].toLowerCase(), 'filename');
+  // These file suffixes indicate a bad file, allow the database to be used for a clean "check"
+  if (filename.indexOf('_CRCMISMATCH.') === -1 && filename.indexOf('_CORRUPT.') === -1) {
+    var m = filename.match(crc_regex1);
+    if (m) {
+      return next(m[1].toLowerCase(), 'filename');
+    }
+    m = filename.match(crc_regex2);
+    if (m) {
+      return next(m[1].toLowerCase(), 'filename');
+    }
   }
   files.findById(filename, function (err, doc) {
     if (err) {
@@ -214,11 +206,15 @@ function doCheck(next) {
       crc32.crcFile(path.join(FOLDER, relpath), function (err, crc) {
         if (err) {
           console.log('\r' + relpath + clc.redBright(' -- error reading file: ' + err));
-          errors++;
+          if (err.code === 'EACCES') {
+            // Not a readable file, don't by noisy about it
+          } else {
+            errors++;
+          }
           results.write('# read error ' + (err.code || '') + ' ' + relpath + '\n');
           return next();
         }
-        crc = formatCRC(crc);
+        crc = crc32.formatCRC(crc);
         var line = '\r' + relpath + clc.blackBright(' -- CRC:' + crc);
         process.stdout.write(line);
         crcFromFilename(relpath, function (expected_crc, source) {
@@ -273,7 +269,7 @@ function doFix(next) {
       var disk_crc = split[1];
       var source = split[3];
       var filename = split.slice(4).join(' ');
-      if (source === 'filename') {
+      if (source === 'filename' && filename.indexOf('_CORRUPT.') === -1 && filename.indexOf('_CRCMISMATCH.') === -1) {
         console.log(clc.red('Cannot update CRC from filename for "' + filename + '" disk crc=' + disk_crc));
         return;
       }
