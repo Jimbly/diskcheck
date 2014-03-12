@@ -78,4 +78,30 @@ exports.crcFile = function (filename, cb) {
   file.pipe(th);
 };
 
+exports.formatCRC = function (crc) {
+  if (crc < 0) {
+    crc += 4294967296;
+  }
+  crc = crc.toString(16);
+  while (crc.length < 8) {
+    crc = '0' + crc;
+  }
+  return crc;
+};
+
+if (module.parent === null) {
+  // Executed crc32.js diretly, work as a command line utility
+  if (process.argv.length !== 3) {
+    console.log('Expected usage: crc32.js file.ext');
+    process.exit();
+  } else {
+    exports.crcFile(process.argv[2], function (err, crc32) {
+      if (err) {
+        throw err;
+      }
+      console.log('CRC32=' + exports.formatCRC(crc32));
+    });
+  }
+}
+
 // TODO: use a native module, this is toooo sloooowwww
