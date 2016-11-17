@@ -9,8 +9,9 @@ var linestream = require('line-stream');
 var util = require('util');
 var MultiTask = require('./multi_task.js');
 
-var MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
-//var MINSCANTIME = Infinity; // Always recheck every file
+//var MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
+var MINSCANTIME = Infinity; // Always recheck every file
+//var MINSCANTIME = 1439131256120-1; // continue from where scan left off
 
 var COLLECTION = 'diskcheck';
 var FOLDER = '/var/data/diskcheck';
@@ -19,7 +20,7 @@ var FOLDER = '/var/data/diskcheck';
 // var FOLDER = '/var/data/smb_private/CD Images/';
 
 // var COLLECTION = 'test';
-// var FOLDER = '/var/data/smb_stuff/Anime/Promos/';
+// var FOLDER = '/var/data/smb_stuff/Video/Anime/Promos/';
 
 var ArgumentParser = require('argparse').ArgumentParser;
 var parser = new ArgumentParser({
@@ -50,45 +51,12 @@ function cleanup() {
 //     console.log(doc);
 // });
 
-// cb(relpath, stat, next)
-function walkDir(base, dir, cb, dir_next) {
-  fs.readdir(path.join(base, dir), function (err, files) {
-    if (err) {
-      throw err;
-    }
-    var idx = 0;
-    function next() {
-      if (idx === files.length) {
-        return dir_next();
-      }
-      var filename = files[idx];
-      ++idx;
-      fs.stat(path.join(base, dir, filename), function (err, stat) {
-        if (err) {
-          throw err;
-        }
-        var sub_relpath = path.join(dir, filename);
-        if (stat.isDirectory()) {
-          walkDir(base, sub_relpath, cb, next);
-        } else if (stat.isFile()) {
-          cb(sub_relpath, stat, next);
-        } else {
-          console.log(filename);
-          console.log(util.inspect(stat));
-          throw "Unknown file type";
-        }
-      });
-    }
-    next();
-  });
-}
-
 var crc_regex1 = /\[([0-9a-f]{8})\]/;
 var crc_regex2 = /\[([0-9A-F]{8})\]/;
 // next(crc || undefined, source)
 function crcFromFilename(filename, next) {
   // These file suffixes indicate a bad file, allow the database to be used for a clean "check"
-  if (filename.indexOf('_CRCMISMATCH.') === -1 && filename.indexOf('_CORRUPT.') === -1) {
+  if (filename.indexOf('_CRCMISMATCH.') === -1 && filename.indexOf('_CORRUPT.') === -1 && filename.slice(-4) !== '.lnk') {
     var m = filename.match(crc_regex1);
     if (m) {
       return next(m[1].toLowerCase(), 'filename');
@@ -181,6 +149,45 @@ function doCheck(next) {
   results.write('# First character command of i=ignore d=update database\n');
   results.write('# disk_crc expected source   path\n');
 
+  // cb(relpath, stat, next)
+  function walkDir(base, dir, cb, dir_next) {
+    fs.readdir(path.join(base, dir), function (err, files) {
+      if (err) {
+        if (err.code === 'EACCES') {
+          // Not a readable file, don't be noisy about it
+        } else {
+          errors++;
+        }
+        results.write('# readdir error ' + (err.code || '') + ' ' + path.join(base, dir) + '\n');
+        return dir_next();
+      }
+      var idx = 0;
+      function next() {
+        if (idx === files.length) {
+          return dir_next();
+        }
+        var filename = files[idx];
+        ++idx;
+        fs.stat(path.join(base, dir, filename), function (err, stat) {
+          if (err) {
+            throw err;
+          }
+          var sub_relpath = path.join(dir, filename);
+          if (stat.isDirectory()) {
+            walkDir(base, sub_relpath, cb, next);
+          } else if (stat.isFile()) {
+            cb(sub_relpath, stat, next);
+          } else {
+            console.log(filename);
+            console.log(util.inspect(stat));
+            throw "Unknown file type";
+          }
+        });
+      }
+      next();
+    });
+  }
+
   walkDir(FOLDER, '/', function (relpath, stat, next) {
     ++count;
     ++count_since_print;
@@ -207,7 +214,7 @@ function doCheck(next) {
         if (err) {
           console.log('\r' + relpath + clc.redBright(' -- error reading file: ' + err));
           if (err.code === 'EACCES') {
-            // Not a readable file, don't by noisy about it
+            // Not a readable file, don't be noisy about it
           } else {
             errors++;
           }
