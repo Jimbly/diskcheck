@@ -10,8 +10,8 @@ var util = require('util');
 var MultiTask = require('./multi_task.js');
 
 //var MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
-var MINSCANTIME = Infinity; // Always recheck every file
-//var MINSCANTIME = 1439131256120-1; // continue from where scan left off
+//var MINSCANTIME = Infinity; // Always recheck every file / start a new scan
+var MINSCANTIME = 1479428428466-1; // continue from where scan left off - use the date the last scan was STARTED
 
 var COLLECTION = 'diskcheck';
 var FOLDER = '/var/data/diskcheck';
@@ -170,10 +170,19 @@ function doCheck(next) {
         ++idx;
         fs.stat(path.join(base, dir, filename), function (err, stat) {
           if (err) {
-            throw err;
+            if (err.code === 'ENOENT') {
+              // bad symlink or file removed during scan, skip
+              return next();
+            } else {
+              console.log(err);
+              throw err;
+            }
           }
           var sub_relpath = path.join(dir, filename);
-          if (stat.isDirectory()) {
+          if (filename === 'Incoming3') {
+            // skip folders named "Incoming3", too much junk
+            next();
+          } else if (stat.isDirectory()) {
             walkDir(base, sub_relpath, cb, next);
           } else if (stat.isFile()) {
             cb(sub_relpath, stat, next);
