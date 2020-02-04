@@ -1,43 +1,55 @@
-/*jslint vars:true, nomen:true, indent:2, plusplus:true, unparam:true, stupid:true */
-"use strict";
-var crc32 = require('./crc32.js');
-var clc = require('cli-color');
-var fs = require('fs');
-var path = require('path');
-var monk = require('monk');
-var linestream = require('line-stream');
-var util = require('util');
-var MultiTask = require('./multi_task.js');
+/*jslint vars:true, nomen:true, indent:2, plusplus:true, unparam:true, stupid:true, esversion:6, noempty:false */
+const crc32 = require('./crc32.js');
+const clc = require('cli-color');
+const fs = require('fs');
+const path = require('path');
+const monk = require('monk');
+const linestream = require('line-stream');
+const util = require('util');
+const MultiTask = require('./multi_task.js');
 
-//var MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
-//var MINSCANTIME = Infinity; // Always recheck every file / start a new scan
-var MINSCANTIME = 1479428428466-1; // continue from where scan left off - use the date the last scan was STARTED
+//const MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
+const MINSCANTIME = Infinity; // Always recheck every file / start a new scan
+//const MINSCANTIME = 1580393626818; // continue from where scan left off - use the date the last scan was STARTED
 
-var COLLECTION = 'diskcheck';
-var FOLDER = '/var/data/diskcheck';
+const COLLECTION = 'diskcheck';
+const FOLDER = '/var/data/diskcheck';
 
-// var COLLECTION = 'test';
-// var FOLDER = '/var/data/smb_private/CD Images/';
+// const COLLECTION = 'test';
+// const FOLDER = '/var/data/smb_private/CD Images/';
 
-// var COLLECTION = 'test';
-// var FOLDER = '/var/data/smb_stuff/Video/Anime/Promos/';
+// const COLLECTION = 'test';
+// const FOLDER = '/var/data/smb_stuff/Video/Anime/Promos/';
 
-var ArgumentParser = require('argparse').ArgumentParser;
-var parser = new ArgumentParser({
+const skip_paths_arr = [
+  '/smb_private/backup/dashingstrike',
+  '/smb_private/etc/apache2/ssl', // no access
+  '/smb_private/nobackup/temp',
+  '/smb_private/backup/nobackup',
+//  '/smb_private/work', // checking this because node binaries live here for now
+];
+let skip_paths = Object.create(null);
+skip_paths_arr.forEach((fn) => (skip_paths[fn] = true));
+
+let ArgumentParser = require('argparse').ArgumentParser;
+let parser = new ArgumentParser({
   version: '0.0.1',
   addHelp: true,
   description: 'diskcheck'
 });
 parser.addArgument([ '-c', '--check' ], { help: 'Run check', action: 'storeTrue'});
+parser.addArgument([ '-s', '--subdir' ], { help: 'Check specific subdir with -c' });
+parser.addArgument([ '-m', '--missing' ], { help: 'After -c, and setting MINSCANTIME,' +
+  ' run check for missing (or now skipped) files', action: 'storeTrue'});
 parser.addArgument([ '-f', '--fix' ], { help: 'Fix mismatches', action: 'storeTrue'});
-var args = parser.parseArgs();
-if ((args.check && args.fix) || (!args.check && !args.fix)) {
-  console.log('Expected exactly one of --check or --fix');
+let args = parser.parseArgs();
+if ((args.check?1:0) + (args.fix?1:0) + (args.missing?1:0) !== 1) {
+  console.log('Expected exactly one of --check or --fix or --missing');
   process.exit();
 }
 
-var db = monk('localhost/diskcheck');
-var files = db.get(COLLECTION);
+let db = monk('localhost/diskcheck');
+let files = db.get(COLLECTION);
 
 function cleanup() {
   console.log('Cleaning up...');
@@ -51,13 +63,15 @@ function cleanup() {
 //     console.log(doc);
 // });
 
-var crc_regex1 = /\[([0-9a-f]{8})\]/;
-var crc_regex2 = /\[([0-9A-F]{8})\]/;
+let crc_regex1 = /\[([0-9a-f]{8})\]/;
+let crc_regex2 = /\[([0-9A-F]{8})\]/;
 // next(crc || undefined, source)
 function crcFromFilename(filename, next) {
   // These file suffixes indicate a bad file, allow the database to be used for a clean "check"
-  if (filename.indexOf('_CRCMISMATCH.') === -1 && filename.indexOf('_CORRUPT.') === -1 && filename.slice(-4) !== '.lnk') {
-    var m = filename.match(crc_regex1);
+  if (filename.indexOf('_CRCMISMATCH.') === -1 && filename.indexOf('_CORRUPT.') === -1 &&
+    filename.slice(-4) !== '.lnk' && filename.slice(-4) !== '.srt'
+  ) {
+    let m = filename.match(crc_regex1);
     if (m) {
       return next(m[1].toLowerCase(), 'filename');
     }
@@ -127,13 +141,7 @@ function replace(filename, crc32, scantime, next) {
   });
 }
 
-function doCheck(next) {
-  var scantime = Date.now();
-  var last_print_time = Date.now();
-  var count = 0;
-  var count_since_print = 0;
-  var errors = 0;
-  var bytes_read = 0;
+function openResults(scantime) {
   if (fs.existsSync('results.txt')) {
     if (fs.existsSync('results.txt.1')) {
       if (fs.existsSync('results.txt.2')) {
@@ -144,10 +152,26 @@ function doCheck(next) {
     fs.renameSync('results.txt', 'results.txt.1');
   }
   var results = fs.createWriteStream('results.txt');
-  results.write('# Scan start: ' + scantime + ' (' + new Date(scantime).toLocaleString() + ')');
+  results.write('# Scan start: ' + scantime + ' (' + new Date(scantime).toLocaleString() + ')\n');
   results.write('# Mismatches logged below\n');
   results.write('# First character command of i=ignore d=update database\n');
   results.write('# disk_crc expected source   path\n');
+  return results;
+}
+
+function closeResults(results) {
+  results.write('# Scan finish: ' + Date.now() + ' (' + new Date().toLocaleString() + ')\n');
+  results.close();
+}
+
+function doCheck(next) {
+  var scantime = Date.now();
+  var last_print_time = Date.now();
+  var count = 0;
+  var count_since_print = 0;
+  var errors = 0;
+  var bytes_read = 0;
+  var results = openResults(scantime);
 
   // cb(relpath, stat, next)
   function walkDir(base, dir, cb, dir_next) {
@@ -179,8 +203,9 @@ function doCheck(next) {
             }
           }
           var sub_relpath = path.join(dir, filename);
-          if (filename === 'Incoming3') {
+          if (filename === 'Incoming3' || skip_paths[sub_relpath]) {
             // skip folders named "Incoming3", too much junk
+            // Also skip "work" folder, it changes lots of files regularly
             next();
           } else if (stat.isDirectory()) {
             walkDir(base, sub_relpath, cb, next);
@@ -197,7 +222,11 @@ function doCheck(next) {
     });
   }
 
-  walkDir(FOLDER, '/', function (relpath, stat, next) {
+  let baserel = '/';
+  if (args.subdir) {
+    baserel = path.join(baserel, args.subdir);
+  }
+  walkDir(FOLDER, baserel, function (relpath, stat, next) {
     ++count;
     ++count_since_print;
     var now = Date.now();
@@ -260,10 +289,32 @@ function doCheck(next) {
       + ', took ' + Math.floor(dt / 1000 / 60) + ':' + pad2(Math.floor(dt / 1000))
       + ', ' + formatBytes(bytes_read) + ', ' + formatBytes(bps) + '/s'
     ));
-    results.write('# Scan finish: ' + Date.now() + ' (' + new Date().toLocaleString() + ')');
-    results.close();
+    closeResults(results);
     next();
   });
+}
+
+function doMissingCheck(next) {
+  let scantime = Date.now();
+  let results = openResults(scantime);
+  var mt = new MultiTask(function (err) {
+    closeResults(results);
+    if (err) {
+      throw err;
+    }
+    next();
+  });
+
+  files.find({}).each(function (doc, cursor) {
+    let relpath = '' + doc._id;
+    if (!doc.crc32 || !doc.scantime || doc.scantime <= MINSCANTIME) {
+      // file was not touched in the last --check run
+      console.log(relpath + clc.blackBright(' -- missing'));
+      results.write('d 0 existing missing ' + relpath + '\n');
+    }
+  }).then(mt.dispatch());
+
+  mt.dispatchDone();
 }
 
 function doFix(next) {
@@ -278,13 +329,27 @@ function doFix(next) {
       return;
     }
     var split = line.split(' ');
-    if (split[0] === 'i') {
+    var op = split[0];
+    var disk_crc = split[1];
+    var source = split[3];
+    var filename = split.slice(4).join(' ');
+    if (op === 'i') {
       return;
     }
-    if (split[0] === 'd') {
-      var disk_crc = split[1];
-      var source = split[3];
-      var filename = split.slice(4).join(' ');
+    if (op === 'd' && source === 'missing') {
+      // remove from database
+      console.log(clc.blue('Removing "' + filename + '" from database'));
+      mt.dispatch();
+      files.remove({ _id: filename }, function (err) {
+        if (err) {
+          return mt.done(err);
+        }
+        console.log(clc.blueBright('Removed "' + filename + '" from database'));
+        mt.done();
+      });
+      return;
+    }
+    if (op === 'd') {
       if (source === 'filename' && filename.indexOf('_CORRUPT.') === -1 && filename.indexOf('_CRCMISMATCH.') === -1) {
         console.log(clc.red('Cannot update CRC from filename for "' + filename + '" disk crc=' + disk_crc));
         return;
@@ -307,6 +372,10 @@ function doFix(next) {
 
 if (args.check) {
   doCheck(function () {
+    cleanup();
+  });
+} else if (args.missing) {
+  doMissingCheck(function () {
     cleanup();
   });
 } else if (args.fix) {
