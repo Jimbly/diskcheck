@@ -10,7 +10,7 @@ const MultiTask = require('./multi_task.js');
 
 //const MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
 const MINSCANTIME = Infinity; // Always recheck every file / start a new scan
-//const MINSCANTIME = 1580393626818; // continue from where scan left off - use the date the last scan was STARTED
+//const MINSCANTIME = 1681530777087; // continue from where scan left off - use the date the last scan was STARTED
 
 const COLLECTION = 'diskcheck';
 const FOLDER = '/var/data/diskcheck';
@@ -24,9 +24,20 @@ const FOLDER = '/var/data/diskcheck';
 const skip_paths_arr = [
   '/smb_private/backup/dashingstrike',
   '/smb_private/etc/apache2/ssl', // no access
+  '/smb_private/ftp', // no access
   '/smb_private/nobackup/temp',
+  '/smb_private/nobackup/video',
   '/smb_private/backup/nobackup',
 //  '/smb_private/work', // checking this because node binaries live here for now
+  '/smb_private/work/.npm',
+  '/smb_private/work/node2',
+  '/smb_private/work/nobackup',
+  '/smb_private/work/SRCSVN',
+  '/smb_private/work/SplodyCloud',
+  '/smb_private/work/src2',
+  '/smb_private/work/src2/web/jimblix/videos/',
+  '/smb_web/jimblix/node_modules',
+  '/smb_web/root/node_modules',
 ];
 let skip_paths = Object.create(null);
 skip_paths_arr.forEach((fn) => (skip_paths[fn] = true));
@@ -307,7 +318,7 @@ function doMissingCheck(next) {
 
   files.find({}).each(function (doc, cursor) {
     let relpath = String(doc._id);
-    if (!doc.crc32 || !doc.scantime || doc.scantime <= MINSCANTIME) {
+    if (!doc.crc32 || !doc.scantime || doc.scantime < MINSCANTIME) {
       // file was not touched in the last --check run
       console.log(relpath + clc.blackBright(' -- missing'));
       results.write('d 0 existing missing ' + relpath + '\n');
