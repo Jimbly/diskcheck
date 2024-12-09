@@ -188,6 +188,7 @@ function doCheck(next) {
   let scantime = Date.now();
   let last_print_time = Date.now();
   let count = 0;
+  let new_files = 0;
   let count_since_print = 0;
   let errors = 0;
   let bytes_read = 0;
@@ -258,6 +259,7 @@ function doCheck(next) {
       console.log(clc.cyan('Checked ' + count + ' files, found ' +
         (errors ? clc.yellowBright(errors) : errors) +
         ' error' + (errors === 1 ? '' : 's') +
+        ', ' + new_files + ' new' +
         ', ' + formatBytes(bytes_read) + ', ' + formatBytes(bps) + '/s'
       ));
     }
@@ -284,6 +286,7 @@ function doCheck(next) {
         process.stdout.write(line);
         crcFromFilename(relpath, function (expected_crc, source) {
           if (!expected_crc) {
+            new_files++;
             console.log(line + clc.blue('  Inserting CRC into database'));
             replace(relpath, crc, scantime, next);
             return;
@@ -306,6 +309,8 @@ function doCheck(next) {
     let dt = Date.now() - scantime;
     let bps = bytes_read * 1000 / dt;
     console.log(clc.cyanBright('Done checking, ' + errors + ' errors' +
+      ', ' + count + ' total' +
+      ', ' + new_files + ' new' +
       ', took ' + Math.floor(dt / 1000 / 60) + ':' + pad2(Math.floor(dt / 1000)) +
       ', ' + formatBytes(bytes_read) + ', ' + formatBytes(bps) + '/s'
     ));
@@ -317,7 +322,10 @@ function doCheck(next) {
 function doMissingCheck(next) {
   let scantime = Date.now();
   let results = openResults(scantime);
+  let count = 0;
+  let missing = 0;
   let mt = new MultiTask(function (err) {
+    console.log('Done checking, checked ' + count + ' records, ' + missing + ' missing');
     closeResults(results);
     if (err) {
       throw err;
@@ -327,10 +335,12 @@ function doMissingCheck(next) {
 
   files.find({}).each(function (doc, cursor) {
     let relpath = String(doc._id);
+    ++count;
     if (!doc.crc32 || !doc.scantime || doc.scantime < MINSCANTIME) {
       // file was not touched in the last --check run
       console.log(relpath + clc.blackBright(' -- missing'));
       results.write('d 0 existing missing ' + relpath + '\n');
+      ++missing;
     }
   }).then(mt.dispatch());
 
