@@ -9,20 +9,22 @@ const util = require('util');
 const MultiTask = require('./multi_task.js');
 
 //const MINSCANTIME = 0; // Do not re-check any files which have been checked - for debugging
-const MINSCANTIME = Infinity; // Always recheck every file / start a new scan
-//const MINSCANTIME = 1681530777087; // continue from where scan left off - use the date the last scan was STARTED
+//const MINSCANTIME = Infinity; // Always recheck every file / start a new scan
+const MINSCANTIME = 1730836691864; // continue from where scan left off - use the date the last scan was STARTED
 
 const COLLECTION = 'diskcheck';
 const FOLDER = '/var/data/diskcheck';
 
 // const COLLECTION = 'test';
-// const FOLDER = '/var/data/smb_private/CD Images/';
+// const FOLDER = '/var/data/smb_private/Data/';
 
 // const COLLECTION = 'test';
 // const FOLDER = '/var/data/smb_stuff/Video/Anime/Promos/';
 
 const skip_paths_arr = [
   '/smb_private/backup/dashingstrike',
+  '/smb_private/backup/jPad/nobackup',
+  '/smb_private/backup/minecraft/minecraft/.git',
   '/smb_private/etc/apache2/ssl', // no access
   '/smb_private/ftp', // no access
   '/smb_private/nobackup/temp',
@@ -30,12 +32,19 @@ const skip_paths_arr = [
   '/smb_private/backup/nobackup',
 //  '/smb_private/work', // checking this because node binaries live here for now
   '/smb_private/work/.npm',
+  '/smb_private/work/.nvm',
+  '/smb_private/work/diskcheck',
   '/smb_private/work/node2',
   '/smb_private/work/nobackup',
   '/smb_private/work/SRCSVN',
   '/smb_private/work/SplodyCloud',
   '/smb_private/work/src2',
-  '/smb_private/work/src2/web/jimblix/videos/',
+  '/smb_private/work/src2/web/jimblix/videos',
+  '/smb_private/work/frvr-sdk',
+  '/smb_private/work/node-heapdump-prebuild',
+  '/smb_private/work/worlds',
+  '/smb_web/jimblix/videos', // symlink to smb_stuff/videos/ etc
+  '/smb_web/jimblix/dist',
   '/smb_web/jimblix/node_modules',
   '/smb_web/root/node_modules',
 ];
@@ -60,7 +69,7 @@ if ((args.check?1:0) + (args.fix?1:0) + (args.missing?1:0) !== 1) {
 }
 
 let db = monk('localhost/diskcheck');
-let files = db.get(COLLECTION);
+let files = db.get(COLLECTION, { castIds: false });
 
 function cleanup() {
   console.log('Cleaning up...');
@@ -70,8 +79,8 @@ function cleanup() {
 // files.insert({ _id: 'foo.txt', crc: '12345678' }, function (err, doc) {
 //   if (err) throw err;
 // });
-// files.findById('foo.txt', function (err, doc){
-//     console.log(doc);
+// files.findOne({ _id: 'foo.txt' }, function (err, doc){
+//   console.log(err, doc);
 // });
 
 let crc_regex1 = /\[([0-9a-f]{8})\]/;
@@ -91,7 +100,7 @@ function crcFromFilename(filename, next) {
       return next(m[1].toLowerCase(), 'filename');
     }
   }
-  files.findById(filename, function (err, doc) {
+  files.findOne({ _id: filename }, function (err, doc) {
     if (err) {
       throw err;
     }
@@ -129,8 +138,8 @@ function shouldCheckFile(filename, cb) {
   if (MINSCANTIME > Date.now()) {
     return cb(true);
   }
-  files.findById(filename, function (err, doc) {
-    if (!err && doc && doc.crc32 && doc.scantime > MINSCANTIME) {
+  files.findOne({ _id: filename }, function (err, doc) {
+    if (!err && doc && doc.crc32 && doc.scantime >= MINSCANTIME) {
       return cb(false);
     }
     cb(true);
@@ -138,8 +147,8 @@ function shouldCheckFile(filename, cb) {
 }
 
 function replace(filename, crc, scantime, next) {
-  files.updateById(filename, { crc32: crc, scantime: scantime }, function (err, code) {
-    if (!err && code === 1) {
+  files.findOneAndUpdate({ _id: filename }, { $set: { crc32: crc, scantime: scantime } }, function (err, existing) {
+    if (!err && existing && existing.crc32 === crc && existing.scantime === scantime) {
       // success
       return next();
     }
@@ -352,6 +361,7 @@ function doFix(next) {
       console.log(clc.blue('Removing "' + filename + '" from database'));
       mt.dispatch();
       files.remove({ _id: filename }, function (err) {
+        console.log(err);
         if (err) {
           return mt.done(err);
         }
@@ -367,7 +377,7 @@ function doFix(next) {
       }
       console.log(clc.blue('Updating "' + filename + '" to ' + disk_crc));
       mt.dispatch();
-      files.updateById(filename, { crc32: disk_crc, scantime: scantime }, function (err, doc) {
+      files.findOneAndUpdate({ _id: filename }, { $set: { crc32: disk_crc, scantime: scantime } }, function (err, doc) {
         if (err) { throw err; }
         console.log(clc.blueBright('Updated "' + filename + '" to ' + disk_crc));
         mt.done();

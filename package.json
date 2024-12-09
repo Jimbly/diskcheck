@@ -10,10 +10,11 @@
   "author": "Jimb Esser (https://github.com/Jimbly)",
   "license": "MIT",
   "dependencies": {
-    "monk": "~0.8.1",
-    "cli-color": "~0.2.3",
     "argparse": "~0.1.15",
+    "cli-color": "~0.2.3",
     "line-stream": "0.0.3",
+    "mongodb": "3.6.3",
+    "monk": "7.3.4",
     "through": "~2.3.4"
   }
 }
